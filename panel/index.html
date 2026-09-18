@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Valheim Panel</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="brand-name" id="brand-name">Valheim Panel</span>
+    </div>
+    <nav class="nav">
+      <div class="nav-head"><span>Server</span></div>
+      <div class="chan-list">
+        <div class="nav-item active" data-section="dashboard">Overview</div>
+        <div class="nav-item" data-section="launch">Launch</div>
+        <div class="nav-item" data-section="world">World &amp; modifiers</div>
+        <div class="nav-item" data-section="worlds">Worlds <span class="n-badge" id="nav-worlds-count">0</span></div>
+      </div>
+      <div class="nav-head"><span>People</span></div>
+      <div class="chan-list">
+        <div class="nav-item" data-section="players">Players &amp; access</div>
+      </div>
+      <div class="nav-head"><span>Data</span></div>
+      <div class="chan-list">
+        <div class="nav-item" data-section="backups">Backups <span class="n-badge" id="nav-backups-count">0</span></div>
+        <div class="nav-item" data-section="log">Log</div>
+        <div class="nav-item" data-section="host">Host</div>
+      </div>
+    </nav>
+    <div class="side-foot">
+      <span class="dot off" id="side-dot"></span>
+      <span id="side-status">…</span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <button type="button" class="menu-btn" id="menu-btn">☰</button>
+
+    <section class="section active" id="section-dashboard">
+      <h2 class="section-title">Overview</h2>
+
+      <div class="join-panel">
+        <div>
+          <div class="join-label">Join code</div>
+          <div class="join-code" id="joinCode">—</div>
+          <div class="join-pass" id="passHint">no password set</div>
+        </div>
+        <div class="btn-row">
+          <button class="primary" id="btnStart">▶ Start</button>
+          <button class="danger" id="btnStop">⏹ Stop</button>
+        </div>
+      </div>
+      <div class="msg" id="powerMsg"></div>
+
+      <div class="grid" id="cards" style="margin-bottom:16px"></div>
+
+      <div class="two-col">
+        <div class="panel-box">
+          <h3>World &amp; saves</h3>
+          <div id="world-info"></div>
+        </div>
+        <div class="panel-box">
+          <h3>Auto-stop</h3>
+          <div class="row" style="border:none;padding:0 0 10px">
+            <span>Stop at</span>
+            <span style="display:flex;gap:6px;align-items:center">
+              <input type="number" id="schedHour" min="0" max="23" placeholder="HH" style="width:52px">
+              :
+              <input type="number" id="schedMin" min="0" max="59" placeholder="MM" style="width:52px">
+            </span>
+          </div>
+          <div class="btn-row">
+            <button id="btnSchedSet">Set</button>
+            <button id="btnSchedCancel" class="ghost" hidden>Cancel</button>
+          </div>
+          <div class="msg" id="schedMsg"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="section-launch">
+      <h2 class="section-title">Launch settings</h2>
+      <p class="panel-note">Everything the official dedicated server exposes as command-line flags. Changes apply on the next start.</p>
+
+      <div class="panel-box">
+        <h3>Password</h3>
+        <div class="access-add">
+          <input type="text" id="newPassword" placeholder="new password (5+ chars)">
+          <button id="btnPasswordSave">Set</button>
+        </div>
+        <div class="msg" id="passwordMsg"></div>
+      </div>
+
+      <div class="panel-box">
+        <div class="form-grid">
+          <label class="field"><label>Server name</label><input type="text" id="cfg-server_name" maxlength="64"></label>
+          <label class="field"><label>Port</label><input type="number" id="cfg-port" min="1024" max="65000"></label>
+          <label class="field"><label>Save interval, sec</label><input type="number" id="cfg-save_interval" min="60"></label>
+          <label class="field"><label>Instance ID</label><input type="text" id="cfg-instance_id" placeholder="only needed with multiple servers on one MAC" maxlength="64"></label>
+        </div>
+        <label class="check-row"><input type="checkbox" id="cfg-crossplay"> Crossplay (PlayFab, no port forwarding needed)</label>
+        <label class="check-row"><input type="checkbox" id="cfg-public"> Public (listed in the server browser, not just by code)</label>
+        <div class="btn-row"><button class="primary" id="btnLaunchSave">Save</button></div>
+        <div class="msg" id="launchMsg"></div>
+      </div>
+
+      <div class="panel-box">
+        <h3>Engine backups</h3>
+        <p class="panel-note">The dedicated server's own periodic backups (separate from the panel's pre-start backups).</p>
+        <div class="form-grid">
+          <label class="field"><label>Keep backups</label><input type="number" id="cfg-backups" min="0"></label>
+          <label class="field"><label>First backup after, sec</label><input type="number" id="cfg-backup_short" min="60"></label>
+          <label class="field"><label>Then every, sec</label><input type="number" id="cfg-backup_long" min="60"></label>
+        </div>
+        <div class="btn-row"><button id="btnBackupCfgSave">Save</button></div>
+        <div class="msg" id="backupCfgMsg"></div>
+      </div>
+    </section>
+
+    <section class="section" id="section-world">
+      <h2 class="section-title">World &amp; modifiers</h2>
+      <p class="panel-note">Exactly what <code>-preset</code> / <code>-modifier</code> / <code>-setkey</code> support on the official server. A preset overrides the modifiers below if set.</p>
+
+      <div class="panel-box">
+        <div class="field">
+          <label>Preset</label>
+          <select id="cfg-preset"></select>
+        </div>
+      </div>
+
+      <div class="panel-box">
+        <h3>Modifiers</h3>
+        <div class="form-grid">
+          <label class="field"><label>Resources</label><select id="cfg-resources"></select></label>
+          <label class="field"><label>Combat</label><select id="cfg-combat"></select></label>
+          <label class="field"><label>Death penalty</label><select id="cfg-death_penalty"></select></label>
+          <label class="field"><label>Raids</label><select id="cfg-raids"></select></label>
+          <label class="field"><label>Portals</label><select id="cfg-portals"></select></label>
+        </div>
+      </div>
+
+      <div class="panel-box">
+        <h3>Keys</h3>
+        <div id="setkey-checks"></div>
+      </div>
+
+      <div class="btn-row"><button class="primary" id="btnWorldSave">Save</button></div>
+      <div class="msg" id="worldMsg"></div>
+    </section>
+
+    <section class="section" id="section-worlds">
+      <h2 class="section-title">Worlds</h2>
+      <p class="panel-note">Switching is only possible while the server is stopped. A new name generates a fresh world.</p>
+      <div class="panel-box" id="worlds-list"></div>
+      <div class="new-world">
+        <input type="text" id="newWorldName" placeholder="new world name (letters/digits)">
+        <button id="btnCreateWorld">Create / select</button>
+      </div>
+      <div class="msg" id="worldsMsg"></div>
+    </section>
+
+    <section class="section" id="section-players">
+      <h2 class="section-title">Players &amp; access</h2>
+
+      <div class="panel-box">
+        <h3>Player history this session</h3>
+        <p class="panel-note">Platform IDs come from the server log — the same IDs the access lists use.</p>
+        <div id="players-list"></div>
+      </div>
+
+      <div class="panel-box">
+        <h3>Access lists</h3>
+        <p class="panel-note">Adding even one player to "Permitted" bans everyone else — that's how the official server works.</p>
+        <div class="access-tabs">
+          <button type="button" class="access-tab active" data-list="admin">Admins</button>
+          <button type="button" class="access-tab" data-list="banned">Banned</button>
+          <button type="button" class="access-tab" data-list="permitted">Permitted</button>
+        </div>
+        <div id="access-content"></div>
+        <div class="access-add">
+          <input type="text" id="accessAddId" placeholder="Steam_76561198000000000">
+          <button id="btnAccessAdd">Add</button>
+        </div>
+        <div class="msg" id="accessMsg"></div>
+      </div>
+    </section>
+
+    <section class="section" id="section-backups">
+      <h2 class="section-title">Backups &amp; rollback</h2>
+      <p class="panel-note">A backup is made automatically before every start. Rollback only works while the server is stopped — the current state is backed up first.</p>
+      <div class="panel-box" id="backups-list"></div>
+    </section>
+
+    <section class="section" id="section-log">
+      <h2 class="section-title">Log</h2>
+      <div class="btn-row" style="margin-bottom:10px">
+        <button id="btnLogRefresh">Refresh</button>
+        <label class="check-row" style="margin:0"><input type="checkbox" id="logAuto" checked> Auto-refresh</label>
+      </div>
+      <div class="log-view" id="logView"></div>
+    </section>
+
+    <section class="section" id="section-host">
+      <h2 class="section-title">Host</h2>
+      <div class="panel-box" id="host-info"></div>
+    </section>
+
+    <footer class="foot" id="foot"></footer>
+  </main>
+</div>
+<div class="backdrop" id="backdrop" hidden></div>
+
+<script>
+const $ = id => document.getElementById(id);
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  return res.json();
+}
+
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.onclick = () => {
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    item.classList.add('active');
+    $('section-' + item.dataset.section).classList.add('active');
+    $('sidebar').classList.remove('open');
+    $('backdrop').hidden = true;
+    if (item.dataset.section === 'log') loadLog();
+  };
+});
+$('menu-btn').onclick = () => { $('sidebar').classList.add('open'); $('backdrop').hidden = false; };
+$('backdrop').onclick = () => { $('sidebar').classList.remove('open'); $('backdrop').hidden = true; };
+
+const fmtDur = s => { s = Math.floor(Math.max(s,0)); const h=Math.floor(s/3600), m=Math.floor(s%3600/60); return h? h+"h "+m+"m" : m+"m "+(s%60)+"s"; };
+const fmtShort = s => { s = Math.floor(Math.max(s,0)); const m=Math.floor(s/60); return m? m+"m "+(s%60)+"s" : s+"s"; };
+const fmtAgo = ts => new Date(ts*1000).toLocaleString("en-GB", {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"});
+const card = (label, value, unit, cls) => `<div class="stat"><div class="label">${label}</div><div class="value ${cls||""}">${value}${unit?`<small>${unit}</small>`:""}</div></div>`;
+const row = (k, v) => `<div class="row"><span>${k}</span><span class="row-val">${v}</span></div>`;
+const barRow = (k, v, pct, cls) => `<div class="row" style="flex-direction:column;align-items:stretch"><div class="row" style="border:none;padding:0"><span>${k}</span><span class="row-val">${v}</span></div><div class="bar"><div class="${cls||""}" style="width:${Math.min(pct,100)}%"></div></div></div>`;
+
+async function tick() {
+  let m;
+  try { m = await api("/api/status"); }
+  catch (e) {
+    $('side-dot').className = 'dot warn';
+    $('side-status').textContent = 'panel unreachable';
+    return;
+  }
+
+  $('brand-name').textContent = m.server_name || 'Valheim Panel';
+  $('side-dot').className = 'dot ' + (m.running ? 'on' : 'off');
+  $('side-status').textContent = m.running ? `running · ${fmtDur(m.uptime_seconds)}` : 'stopped';
+
+  $('btnStart').disabled = m.running;
+  $('btnStop').disabled = !m.running || m.stop_pending;
+  if (m.stop_pending) {
+    $('powerMsg').textContent = `stopping after next autosave · ~${fmtShort(m.next_save_in_seconds >= 0 ? m.next_save_in_seconds : 0)} left`;
+    $('powerMsg').className = 'msg';
+  }
+
+  $('joinCode').textContent = (m.running && m.join_code) ? m.join_code : '—';
+
+  const memMb = m.memory_bytes / 1048576;
+  $('cards').innerHTML = m.running ? (
+    card("Players", m.players, "", m.players>0?"ok":"") +
+    card("World objects", m.zdos.toLocaleString("en"), "") +
+    card("Server CPU", m.cpu_percent.toFixed(0), "%", m.cpu_percent>120?"warn":"") +
+    card("Server memory", memMb.toFixed(0), "MB", memMb>2500?"warn":"") +
+    card("Next save", m.next_save_in_seconds>=0?fmtShort(m.next_save_in_seconds):"—", "") +
+    card("Network errors", m.network_errors, "", m.network_errors>0?"warn":"ok")
+  ) : "";
+
+  const worldMb = m.world_size_bytes / 1048576;
+  $('world-info').innerHTML =
+    row("World", m.world_name) +
+    row("Resources", m.resources_label) +
+    row("Saves this session", m.world_saves) +
+    row("Since last save", m.seconds_since_save>=0?fmtShort(m.seconds_since_save):"—") +
+    row("World size on disk", worldMb.toFixed(1)+" MB") +
+    row("Backups kept", m.backups_total) +
+    row("Server network", m.running ? ("↑ "+m.net_sent+" B/s · ↓ "+m.net_recv+" B/s") : "—") +
+    row("Player disconnects", m.connection_losses);
+
+  const sched = m.scheduled_stop;
+  $('btnSchedCancel').hidden = !sched;
+  const schedMsg = $('schedMsg');
+  if (sched && !schedMsg.dataset.userSet) {
+    schedMsg.textContent = `set for ${String(sched.hour).padStart(2,"0")}:${String(sched.minute).padStart(2,"0")}`;
+    schedMsg.className = 'msg ok';
+  }
+
+  const pageMb = m.pagefile_used_bytes / 1048576;
+  const diskFreeGb = m.disk_free_bytes / 1073741824;
+  const diskTotalGb = m.disk_total_bytes / 1073741824;
+  const diskUsedPct = m.disk_total_bytes ? 100 - (m.disk_free_bytes / m.disk_total_bytes * 100) : 0;
+  $('host-info').innerHTML =
+    (m.has_battery ? row("Power", m.on_ac_power ? "on AC" : "⚠️ on battery") : "") +
+    (m.has_battery ? row("Battery", m.battery_percent + " %") : "") +
+    barRow("CPU load", m.cpu_used_percent.toFixed(0)+" % ("+m.cpu_count+" cores)", m.cpu_used_percent, m.cpu_used_percent>90?"warn":"") +
+    barRow("System memory", m.memory_used_percent.toFixed(0)+" %", m.memory_used_percent, m.memory_used_percent>85?"warn":"") +
+    row("Swap used", pageMb.toFixed(0)+" MB") +
+    barRow("Disk free", diskFreeGb.toFixed(1)+" / "+diskTotalGb.toFixed(0)+" GB", diskUsedPct, diskUsedPct>90?"warn":"");
+
+  $('foot').textContent = "updated " + new Date().toLocaleTimeString("en-GB");
+}
+
+$('btnStart').onclick = async () => {
+  const msg = $('powerMsg');
+  msg.textContent = "starting…"; msg.className = "msg";
+  const res = await api("/api/start", {method:"POST"});
+  msg.textContent = res.ok ? "start requested, ~30 seconds" : res.error;
+  msg.className = "msg " + (res.ok ? "ok" : "bad");
+  setTimeout(tick, 3000);
+};
+
+$('btnStop').onclick = async () => {
+  if (!confirm("Stop the server? It will save the world before shutting down.")) return;
+  const res = await api("/api/stop", {method:"POST"});
+  $('powerMsg').textContent = res.ok ? "stop requested" : res.error;
+  $('powerMsg').className = "msg " + (res.ok ? "ok" : "bad");
+  tick();
+};
+
+$('btnSchedSet').onclick = async () => {
+  const hour = +$('schedHour').value;
+  const minute = +$('schedMin').value || 0;
+  const msg = $('schedMsg');
+  if (Number.isNaN(hour)) { msg.textContent = "set an hour"; msg.className = "msg bad"; return; }
+  const res = await api("/api/schedule_stop", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({hour, minute})});
+  msg.textContent = res.ok ? "auto-stop set" : res.error;
+  msg.className = "msg " + (res.ok ? "ok" : "bad");
+  tick();
+};
+$('btnSchedCancel').onclick = async () => { await api("/api/cancel_schedule", {method:"POST"}); tick(); };
+
+$('btnPasswordSave').onclick = async () => {
+  const password = $('newPassword').value;
+  const msg = $('passwordMsg');
+  const res = await api("/api/password", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({password})});
+  msg.textContent = res.ok ? "password set" : res.error;
+  msg.className = "msg " + (res.ok ? "ok" : "bad");
+  if (res.ok) { $('newPassword').value = ""; $('passHint').textContent = "password set"; }
+};
+
+let CFG = null;
+
+function fillSelect(sel, values, labels) {
+  sel.innerHTML = values.map(v => `<option value="${v}">${(labels && labels[v]) || (v || "default")}</option>`).join("");
+}
+
+async function loadConfig() {
+  const data = await api("/api/config");
+  CFG = data.config;
+
+  $('cfg-server_name').value = CFG.server_name;
+  $('cfg-port').value = CFG.port;
+  $('cfg-save_interval').value = CFG.save_interval;
+  $('cfg-instance_id').value = CFG.instance_id;
+  $('cfg-crossplay').checked = CFG.crossplay;
+  $('cfg-public').checked = CFG.public;
+  $('cfg-backups').value = CFG.backups;
+  $('cfg-backup_short').value = CFG.backup_short;
+  $('cfg-backup_long').value = CFG.backup_long;
+
+  fillSelect($('cfg-preset'), data.valid.preset);
+  fillSelect($('cfg-resources'), data.valid.resources, data.resource_labels);
+  fillSelect($('cfg-combat'), data.valid.combat);
+  fillSelect($('cfg-death_penalty'), data.valid.death_penalty);
+  fillSelect($('cfg-raids'), data.valid.raids, data.raid_labels);
+  fillSelect($('cfg-portals'), data.valid.portals);
+  $('cfg-preset').value = CFG.preset;
+  $('cfg-resources').value = CFG.resources;
+  $('cfg-combat').value = CFG.combat;
+  $('cfg-death_penalty').value = CFG.death_penalty;
+  $('cfg-raids').value = CFG.raids;
+  $('cfg-portals').value = CFG.portals;
+
+  $('setkey-checks').innerHTML = data.setkey_choices.map(k =>
+    `<label class="check-row"><input type="checkbox" class="setkey-cb" value="${k}" ${CFG.setkeys.includes(k)?"checked":""}> ${data.setkey_labels[k] || k}</label>`
+  ).join("");
+}
+
+async function saveConfigPatch(patch, msgEl) {
+  const res = await api("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(patch)});
+  msgEl.textContent = res.ok ? (res.applies_now ? "saved" : "saved, applies on next start") : res.error;
+  msgEl.className = "msg " + (res.ok ? "ok" : "bad");
+  if (res.ok) loadConfig();
+}
+
+$('btnLaunchSave').onclick = () => saveConfigPatch({
+  server_name: $('cfg-server_name').value,
+  port: +$('cfg-port').value,
+  save_interval: +$('cfg-save_interval').value,
+  instance_id: $('cfg-instance_id').value,
+  crossplay: $('cfg-crossplay').checked,
+  public: $('cfg-public').checked,
+}, $('launchMsg'));
+
+$('btnBackupCfgSave').onclick = () => saveConfigPatch({
+  backups: +$('cfg-backups').value,
+  backup_short: +$('cfg-backup_short').value,
+  backup_long: +$('cfg-backup_long').value,
+}, $('backupCfgMsg'));
+
+$('btnWorldSave').onclick = () => {
+  const setkeys = [...document.querySelectorAll('.setkey-cb:checked')].map(c => c.value);
+  saveConfigPatch({
+    preset: $('cfg-preset').value,
+    resources: $('cfg-resources').value,
+    combat: $('cfg-combat').value,
+    death_penalty: $('cfg-death_penalty').value,
+    raids: $('cfg-raids').value,
+    portals: $('cfg-portals').value,
+    setkeys,
+  }, $('worldMsg'));
+};
+
+async function loadWorlds() {
+  const data = await api("/api/worlds");
+  $('nav-worlds-count').textContent = data.worlds.length;
+  $('worlds-list').innerHTML = data.worlds.map(w => `
+    <div class="world-item ${w===data.active?'active':''}" data-world="${w}">
+      <span class="wname">${w}</span>
+      ${w===data.active ? '<span class="wtag">active</span>' : '<button type="button" class="ghost" data-switch="'+w+'">Select</button>'}
+    </div>`).join("") || '<p class="list-empty">no worlds yet</p>';
+  document.querySelectorAll('[data-switch]').forEach(btn => {
+    btn.onclick = () => switchWorld(btn.dataset.switch);
+  });
+}
+
+async function switchWorld(name) {
+  const msg = $('worldsMsg');
+  const res = await api("/api/world", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({name})});
+  msg.textContent = res.ok ? (res.new_world ? "selected — a fresh world will be generated on start" : "selected") : res.error;
+  msg.className = "msg " + (res.ok ? "ok" : "bad");
+  if (res.ok) { loadWorlds(); loadConfig(); tick(); }
+}
+
+$('btnCreateWorld').onclick = () => {
+  const name = $('newWorldName').value.trim();
+  if (!name) return;
+  switchWorld(name);
+  $('newWorldName').value = "";
+};
+
+let ACCESS = {admin:[], banned:[], permitted:[]};
+let activeAccessList = 'admin';
+
+async function loadPlayers() {
+  const data = await api("/api/players");
+  ACCESS = data.access;
+  const tag = id => {
+    if (ACCESS.admin.includes(id)) return '<span class="tag admin">admin</span>';
+    if (ACCESS.banned.includes(id)) return '<span class="tag banned">banned</span>';
+    if (ACCESS.permitted.includes(id)) return '<span class="tag permitted">permitted</span>';
+    return '';
+  };
+  $('players-list').innerHTML = data.players.map(p => `
+    <div class="list-item">
+      <div><div>${p.name}</div><div class="meta">${p.id}</div></div>
+      ${tag(p.id)}
+    </div>`).join("") || '<p class="list-empty">nobody has joined yet</p>';
+  renderAccessTab();
+}
+
+function renderAccessTab() {
+  const list = ACCESS[activeAccessList] || [];
+  $('access-content').innerHTML = list.map(id => `
+    <div class="list-item">
+      <span class="meta">${id}</span>
+      <button type="button" class="ghost" data-remove="${id}">Remove</button>
+    </div>`).join("") || '<p class="list-empty">list is empty</p>';
+  document.querySelectorAll('[data-remove]').forEach(btn => {
+    btn.onclick = () => accessAction('remove', btn.dataset.remove);
+  });
+}
+
+document.querySelectorAll('.access-tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('.access-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    activeAccessList = tab.dataset.list;
+    renderAccessTab();
+  };
+});
+
+async function accessAction(action, id) {
+  const msg = $('accessMsg');
+  const res = await api("/api/access", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({list: activeAccessList, action, id})});
+  msg.textContent = res.ok ? "done" : res.error;
+  msg.className = "msg " + (res.ok ? "ok" : "bad");
+  if (res.ok) loadPlayers();
+}
+
+$('btnAccessAdd').onclick = () => {
+  const id = $('accessAddId').value.trim();
+  if (!id) return;
+  accessAction('add', id);
+  $('accessAddId').value = "";
+};
+
+async function loadBackups() {
+  const data = await api("/api/backups");
+  $('nav-backups-count').textContent = data.backups.length;
+  $('backups-list').innerHTML = data.backups.slice(0, 12).map(b => `
+    <div class="list-item">
+      <div><div>save ${b.save}</div><div class="meta">${fmtAgo(b.mtime)} · ${(b.size/1048576).toFixed(1)} MB</div></div>
+      <button type="button" class="ghost" data-rollback="${b.file}">Rollback</button>
+    </div>`).join("") || '<p class="list-empty">no backups yet</p>';
+  document.querySelectorAll('[data-rollback]').forEach(btn => {
+    btn.onclick = () => doRollback(btn.dataset.rollback);
+  });
+}
+
+async function doRollback(file) {
+  if (!confirm(`Roll back the world to ${file}?\nThe current state will be backed up first.`)) return;
+  const res = await api("/api/rollback", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({file})});
+  alert(res.ok ? "Rollback done. Start the server." : "Error: " + res.error);
+  tick(); loadBackups();
+}
+
+function classifyLine(line) {
+  if (/World save \(5\/5\) done/.test(line)) return 'l-save';
+  if (/error|Error|failed|Failed/.test(line)) return 'l-err';
+  if (/warn|Warn|lost|Lost/.test(line)) return 'l-warn';
+  if (/^\s*$/.test(line)) return 'l-dim';
+  return '';
+}
+
+async function loadLog() {
+  const data = await api("/api/log?n=300");
+  const el = $('logView');
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+  el.innerHTML = data.lines.map(l => {
+    const cls = classifyLine(l);
+    const esc = l.replace(/&/g,"&amp;").replace(/</g,"&lt;");
+    return cls ? `<span class="${cls}">${esc}</span>` : esc;
+  }).join("\n");
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+$('btnLogRefresh').onclick = loadLog;
+setInterval(() => {
+  if ($('logAuto').checked && $('section-log').classList.contains('active')) loadLog();
+}, 4000);
+
+tick();
+loadConfig();
+loadWorlds();
+loadPlayers();
+loadBackups();
+setInterval(tick, 5000);
+setInterval(loadBackups, 30000);
+setInterval(loadPlayers, 20000);
+</script>
+</body>
+</html>
