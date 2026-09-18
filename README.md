@@ -16,6 +16,48 @@ Open `http://<host>:3030`.
 
 The server binary is downloaded via SteamCMD on first start and kept in the `valheim-server` volume, so later restarts don't re-download it.
 
+## Never used Linux before?
+
+Step by step, copy-paste each command into a terminal (open one with `Ctrl+Alt+T`, or search "Terminal" in the app menu).
+
+1. Install Docker:
+   ```
+   curl -fsSL https://get.docker.com | sudo sh
+   ```
+
+2. Download this project — either:
+   ```
+   git clone https://github.com/h4root/valheim-panel.git
+   cd valheim-panel
+   ```
+   or, without git: click the green "Code" button on this page → "Download ZIP", extract it, then `cd` into the extracted folder in the terminal.
+
+3. Create the config file and fill it in:
+   ```
+   cp .env.example .env
+   nano .env
+   ```
+   Change `SERVER_NAME` and `PASSWORD`. Save with `Ctrl+O`, `Enter`, exit with `Ctrl+X`.
+
+4. Start it:
+   ```
+   sudo docker compose up -d
+   ```
+   First start downloads the ~1 GB server, so it takes a minute or two.
+
+5. Find this machine's address:
+   ```
+   hostname -I
+   ```
+   Take the first number shown, e.g. `192.168.1.50`.
+
+6. Open `http://192.168.1.50:3030` (use your own address) in a browser — from the same machine or a phone on the same network.
+
+Later, if you need it:
+- Watch it run: `sudo docker compose logs -f`
+- Stop it: `sudo docker compose down` (the world is kept in a separate volume, this doesn't delete it)
+- Update: `git pull && sudo docker compose up -d --build`
+
 ## Config
 
 Set once in `.env` before the first start — the panel takes over from there and everything else (world modifiers, resources, presets, access lists, backups) is configured from the UI:
