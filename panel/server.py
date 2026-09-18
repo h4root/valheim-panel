@@ -1,7 +1,6 @@
+import ipaddress
 import json
-import os
 import re
-import signal
 import subprocess
 import threading
 import time
@@ -9,16 +8,18 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-ROOT = Path(os.environ.get("VALHEIM_ROOT", "/server"))
-INSTALL_DIR = Path(os.environ.get("VALHEIM_INSTALL_DIR", str(ROOT / "install")))
-SAVE_DIR = ROOT / "config"
-WORLDS_DIR = SAVE_DIR / "worlds_local"
+ROOT = Path(__file__).resolve().parent.parent
 LOG_DIR = ROOT / "logs"
+SAVE_DIR = ROOT / "save"
+WORLDS_DIR = SAVE_DIR / "worlds_local"
 BACKUP_DIR = ROOT / "backups"
-CONFIG_FILE = ROOT / "panel.json"
-PASSWORD_FILE = ROOT / "password"
-BIND = ("0.0.0.0", int(os.environ.get("PANEL_PORT", "3030")))
-EXE_NAME = "valheim_server.x86_64"
+START_SCRIPT = ROOT / "start.ps1"
+PASSWORD_FILE = ROOT / ".password"
+BIND = ("0.0.0.0", 3030)
+EXE_NAME = "valheim_server.exe"
+
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_NO_WINDOW = 0x08000000
 
 VALID = {
     "preset": ["", "normal", "casual", "easy", "hard", "hardcore", "immersive", "hammer"],
@@ -47,35 +48,6 @@ ACCESS_FILES = {
     "permitted": SAVE_DIR / "permittedlist.txt",
 }
 
-DEFAULT_CONFIG = {
-    "server_name": "My Valheim Server",
-    "world_name": "Dedicated",
-    "port": 2456,
-    "public": False,
-    "crossplay": True,
-    "instance_id": "",
-    "preset": "",
-    "combat": "",
-    "death_penalty": "",
-    "resources": "",
-    "raids": "",
-    "portals": "",
-    "setkeys": [],
-    "save_interval": 1800,
-    "backups": 4,
-    "backup_short": 7200,
-    "backup_long": 43200,
-}
-
-ENV_SEED = {
-    "server_name": "SERVER_NAME", "world_name": "WORLD_NAME", "port": "PORT",
-    "public": "PUBLIC", "crossplay": "CROSSPLAY", "instance_id": "INSTANCE_ID",
-    "preset": "PRESET", "combat": "COMBAT", "death_penalty": "DEATH_PENALTY",
-    "resources": "RESOURCES", "raids": "RAIDS", "portals": "PORTALS",
-    "save_interval": "SAVE_INTERVAL", "backups": "BACKUPS",
-    "backup_short": "BACKUP_SHORT", "backup_long": "BACKUP_LONG",
-}
-
 _managed_lock = threading.Lock()
 _managed_proc = None  # subprocess.Popen of the server started by this panel, or None
 _schedule_timer = None
@@ -84,83 +56,129 @@ _stop_lock = threading.Lock()
 _stop_state = None  # {"requested_at": epoch, "hard_deadline": epoch} while a stop is in flight
 
 
+def run_ps(script, timeout=8):
+    try:
+        return subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=timeout,
+        ).stdout
+    except (subprocess.SubprocessError, OSError):
+        return ""
+
+
 def allowed(host):
-    # Docker containers are expected to publish this port only on a trusted
-    # network (see docker-compose.yml comments) — no extra IP filtering here.
-    return True
+    try:
+        return ipaddress.ip_address(host).is_private
+    except ValueError:
+        return False
 
 
-# ---------- config storage (JSON file, seeded from env on first boot) ----------
+# ---------- reading/writing start.ps1 ----------
 
-def _seed_from_env():
-    cfg = dict(DEFAULT_CONFIG)
-    for key, env_name in ENV_SEED.items():
-        raw = os.environ.get(env_name)
-        if raw is None:
-            continue
-        if isinstance(DEFAULT_CONFIG[key], bool):
-            cfg[key] = raw.strip().lower() in ("1", "true", "yes", "on")
-        elif isinstance(DEFAULT_CONFIG[key], int):
-            try:
-                cfg[key] = int(raw)
-            except ValueError:
-                pass
-        else:
-            cfg[key] = raw
-    setkeys_raw = os.environ.get("SETKEYS", "")
-    if setkeys_raw:
-        cfg["setkeys"] = [k.strip() for k in setkeys_raw.split(",") if k.strip() in SETKEY_CHOICES]
-    for field in VALID:
-        if cfg[field] not in VALID[field]:
-            cfg[field] = ""
-    return cfg
+def _ps_get_string(text, name):
+    m = re.search(rf'^\${name}\s*=\s*"([^"]*)"', text, re.MULTILINE)
+    return m.group(1) if m else ""
 
 
-def _write_config_full(cfg):
-    ROOT.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+def _ps_set_string(text, name, value):
+    escaped = str(value).replace('"', '`"')
+    return re.sub(rf'^\${name}\s*=\s*"[^"]*"', f'${name} = "{escaped}"', text, count=1, flags=re.MULTILINE)
 
 
-def read_config():
-    if CONFIG_FILE.exists():
-        try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-            return {**DEFAULT_CONFIG, **data}
-        except (json.JSONDecodeError, OSError):
-            pass
-    cfg = _seed_from_env()
-    _write_config_full(cfg)
-    password = os.environ.get("PASSWORD", "")
-    if password and not PASSWORD_FILE.exists():
-        action_set_password(password)
-    return cfg
+def _ps_get_int(text, name, default=0):
+    m = re.search(rf'^\${name}\s*=\s*(-?\d+)', text, re.MULTILINE)
+    return int(m.group(1)) if m else default
+
+
+def _ps_set_int(text, name, value):
+    return re.sub(rf'^\${name}\s*=\s*-?\d+', f'${name} = {int(value)}', text, count=1, flags=re.MULTILINE)
+
+
+def _ps_get_bool(text, name):
+    m = re.search(rf'^\${name}\s*=\s*\$(true|false)', text, re.MULTILINE | re.IGNORECASE)
+    return bool(m) and m.group(1).lower() == "true"
+
+
+def _ps_set_bool(text, name, value):
+    lit = "$true" if value else "$false"
+    return re.sub(rf'^\${name}\s*=\s*\$(true|false)', f'${name} = {lit}', text, count=1,
+                  flags=re.MULTILINE | re.IGNORECASE)
+
+
+def _ps_get_array(text, name):
+    m = re.search(rf'^\${name}\s*=\s*@\(([^)]*)\)', text, re.MULTILINE)
+    return re.findall(r'"([^"]*)"', m.group(1)) if m else []
+
+
+def _ps_set_array(text, name, values):
+    literal = "@(" + ", ".join(f'"{v}"' for v in values) + ")" if values else "@()"
+    return re.sub(rf'^\${name}\s*=\s*@\([^)]*\)', f'${name} = {literal}', text, count=1, flags=re.MULTILINE)
+
+
+CONFIG_GET = {
+    "server_name": lambda t: _ps_get_string(t, "ServerName"),
+    "world_name": lambda t: _ps_get_string(t, "WorldName"),
+    "port": lambda t: _ps_get_int(t, "Port", 2456),
+    "public": lambda t: bool(_ps_get_int(t, "Public", 0)),
+    "crossplay": lambda t: _ps_get_bool(t, "Crossplay"),
+    "instance_id": lambda t: _ps_get_string(t, "InstanceId"),
+    "preset": lambda t: _ps_get_string(t, "Preset"),
+    "combat": lambda t: _ps_get_string(t, "Combat"),
+    "death_penalty": lambda t: _ps_get_string(t, "DeathPenalty"),
+    "resources": lambda t: _ps_get_string(t, "Resources"),
+    "raids": lambda t: _ps_get_string(t, "Raids"),
+    "portals": lambda t: _ps_get_string(t, "Portals"),
+    "setkeys": lambda t: _ps_get_array(t, "SetKeys"),
+    "save_interval": lambda t: _ps_get_int(t, "SaveInterval", 1800),
+    "backups": lambda t: _ps_get_int(t, "Backups", 4),
+    "backup_short": lambda t: _ps_get_int(t, "BackupShort", 7200),
+    "backup_long": lambda t: _ps_get_int(t, "BackupLong", 43200),
+}
 
 
 def _valid(field, value):
     return value if value in VALID[field] else ""
 
 
+CONFIG_SET = {
+    "server_name": lambda t, v: _ps_set_string(t, "ServerName", str(v).strip()[:64] or "Server"),
+    "port": lambda t, v: _ps_set_int(t, "Port", min(65000, max(1024, int(v)))),
+    "public": lambda t, v: _ps_set_int(t, "Public", 1 if v else 0),
+    "crossplay": lambda t, v: _ps_set_bool(t, "Crossplay", bool(v)),
+    "instance_id": lambda t, v: _ps_set_string(t, "InstanceId", str(v).strip()[:64]),
+    "preset": lambda t, v: _ps_set_string(t, "Preset", _valid("preset", v)),
+    "combat": lambda t, v: _ps_set_string(t, "Combat", _valid("combat", v)),
+    "death_penalty": lambda t, v: _ps_set_string(t, "DeathPenalty", _valid("death_penalty", v)),
+    "resources": lambda t, v: _ps_set_string(t, "Resources", _valid("resources", v)),
+    "raids": lambda t, v: _ps_set_string(t, "Raids", _valid("raids", v)),
+    "portals": lambda t, v: _ps_set_string(t, "Portals", _valid("portals", v)),
+    "setkeys": lambda t, v: _ps_set_array(t, "SetKeys", [k for k in v if k in SETKEY_CHOICES]),
+    "save_interval": lambda t, v: _ps_set_int(t, "SaveInterval", max(60, int(v))),
+    "backups": lambda t, v: _ps_set_int(t, "Backups", max(0, int(v))),
+    "backup_short": lambda t, v: _ps_set_int(t, "BackupShort", max(60, int(v))),
+    "backup_long": lambda t, v: _ps_set_int(t, "BackupLong", max(60, int(v))),
+}
+
+
+def read_config():
+    text = START_SCRIPT.read_text(encoding="utf-8")
+    return {name: getter(text) for name, getter in CONFIG_GET.items()}
+
+
 def write_config(patch):
-    cfg = read_config()
+    text = START_SCRIPT.read_text(encoding="utf-8")
     for key, value in patch.items():
-        if key not in DEFAULT_CONFIG:
+        setter = CONFIG_SET.get(key)
+        if setter is None:
             continue
-        if key in VALID:
-            value = _valid(key, value)
-        elif key == "setkeys":
-            value = [k for k in value if k in SETKEY_CHOICES]
-        elif key == "port":
-            value = min(65000, max(1024, int(value)))
-        elif key == "save_interval":
-            value = max(60, int(value))
-        elif key in ("backups", "backup_short", "backup_long"):
-            value = max(0, int(value))
-        elif key == "server_name":
-            value = str(value).strip()[:64] or "Server"
-        elif key == "instance_id":
-            value = str(value).strip()[:64]
-        cfg[key] = value
-    _write_config_full(cfg)
+        text = setter(text, value)
+    START_SCRIPT.write_text(text, encoding="utf-8")
+
+
+def server_dir():
+    text = START_SCRIPT.read_text(encoding="utf-8")
+    m = re.search(r'^\$ServerDir\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    return Path(m.group(1)) if m else None
 
 
 def world_dir(name=None):
@@ -173,10 +191,6 @@ def action_set_password(password):
         return {"ok": False, "error": "password must be at least 5 characters"}
     ROOT.mkdir(parents=True, exist_ok=True)
     PASSWORD_FILE.write_text(password, encoding="utf-8")
-    try:
-        os.chmod(PASSWORD_FILE, 0o600)
-    except OSError:
-        pass
     return {"ok": True}
 
 
@@ -189,49 +203,31 @@ def server_pid():
             return _managed_proc.pid
         if _managed_proc is not None:
             _managed_proc = None
-    try:
-        out = subprocess.run(["pgrep", "-x", EXE_NAME], capture_output=True, text=True, timeout=5).stdout.strip()
-    except (subprocess.SubprocessError, OSError):
-        return None
-    return int(out.splitlines()[0]) if out else None
-
-
-def _proc_stat_ticks(text):
-    after = text.rsplit(")", 1)[1].split()
-    return int(after[11]) + int(after[12])  # utime + stime
+    out = run_ps(f"(Get-Process -Name '{EXE_NAME[:-4]}' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Id)")
+    out = out.strip()
+    return int(out) if out.isdigit() else None
 
 
 def proc_stats(pid):
+    script = f"""
+$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue
+if (-not $p) {{ "null"; exit }}
+$cpu1 = $p.CPU
+Start-Sleep -Milliseconds 300
+$p.Refresh()
+$cpu2 = $p.CPU
+$pct = [math]::Round((($cpu2 - $cpu1) / 0.3) * 100, 1)
+$uptime = [int]((Get-Date) - $p.StartTime).TotalSeconds
+[PSCustomObject]@{{ cpu = $pct; rss = $p.WorkingSet64; uptime = $uptime }} | ConvertTo-Json -Compress
+"""
+    out = run_ps(script, timeout=6).strip()
     try:
-        stat1 = Path(f"/proc/{pid}/stat").read_text()
-        t1 = time.time()
-        time.sleep(0.3)
-        stat2 = Path(f"/proc/{pid}/stat").read_text()
-        t2 = time.time()
-    except OSError:
+        data = json.loads(out)
+    except (json.JSONDecodeError, ValueError):
         return None
-    clk = os.sysconf("SC_CLK_TCK")
-    dt = t2 - t1
-    cpu_pct = round((_proc_stat_ticks(stat2) - _proc_stat_ticks(stat1)) / clk / dt * 100, 1) if dt else 0.0
-
-    rss = 0
-    try:
-        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
-            if line.startswith("VmRSS:"):
-                rss = int(line.split()[1]) * 1024
-                break
-    except OSError:
-        pass
-
-    uptime = 0
-    try:
-        starttime_ticks = int(stat2.rsplit(")", 1)[1].split()[19])
-        sys_uptime = float(Path("/proc/uptime").read_text().split()[0])
-        uptime = max(0, int(sys_uptime - starttime_ticks / clk))
-    except (OSError, IndexError, ValueError):
-        pass
-
-    return cpu_pct, rss, uptime
+    if data is None:
+        return None
+    return data["cpu"], data["rss"], data["uptime"]
 
 
 def current_log():
@@ -284,46 +280,50 @@ def log_stats(path):
 
 
 def battery():
-    base = Path("/sys/class/power_supply")
-    if not base.is_dir():
+    out = run_ps(
+        "Get-CimInstance Win32_Battery | Select-Object EstimatedChargeRemaining,BatteryStatus | ConvertTo-Json -Compress"
+    ).strip()
+    if not out:
         return None
-    for bat in sorted(base.glob("BAT*")):
-        try:
-            capacity = int((bat / "capacity").read_text().strip())
-            status = (bat / "status").read_text().strip()
-        except OSError:
-            continue
-        return capacity, 1 if status in ("Charging", "Full") else 0
-    return None
+    try:
+        data = json.loads(out)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not data:
+        return None
+    on_ac = 1 if data.get("BatteryStatus") == 2 else 0
+    return data.get("EstimatedChargeRemaining", 0), on_ac
 
 
 def system_stats():
-    def cpu_line():
-        with open("/proc/stat") as f:
-            vals = list(map(int, f.readline().split()[1:]))
-        return vals[3] + vals[4], sum(vals)  # idle+iowait, total
-
-    idle1, total1 = cpu_line()
-    time.sleep(0.2)
-    idle2, total2 = cpu_line()
-    dt = total2 - total1
-    cpu_pct = round((1 - (idle2 - idle1) / dt) * 100, 1) if dt else 0.0
-
-    meminfo = {}
-    with open("/proc/meminfo") as f:
-        for line in f:
-            k, v = line.split(":", 1)
-            meminfo[k] = int(v.strip().split()[0]) * 1024
-    mem_total = meminfo.get("MemTotal", 0)
-    mem_avail = meminfo.get("MemAvailable", mem_total)
-    mem_pct = round((1 - mem_avail / mem_total) * 100, 1) if mem_total else 0.0
-    pagefile_bytes = meminfo.get("SwapTotal", 0) - meminfo.get("SwapFree", 0)
-
-    st = os.statvfs(str(ROOT))
+    drive = ROOT.drive.rstrip(":")
+    script = f"""
+$os = Get-CimInstance Win32_OperatingSystem
+$memPct = [math]::Round((1 - $os.FreePhysicalMemory / $os.TotalVisibleMemorySize) * 100, 1)
+$cpuPct = (Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor | Where-Object {{ $_.Name -eq '_Total' }}).PercentProcessorTime
+$vol = Get-Volume -DriveLetter '{drive}' -ErrorAction SilentlyContinue
+$page = (Get-CimInstance Win32_PageFileUsage | Measure-Object CurrentUsage -Sum).Sum
+[PSCustomObject]@{{
+    mem_pct = $memPct
+    cpu_pct = [math]::Round($cpuPct, 1)
+    disk_free = if ($vol) {{ $vol.SizeRemaining }} else {{ 0 }}
+    disk_total = if ($vol) {{ $vol.Size }} else {{ 0 }}
+    pagefile_mb = if ($page) {{ $page }} else {{ 0 }}
+    ncpu = [Environment]::ProcessorCount
+}} | ConvertTo-Json -Compress
+"""
+    out = run_ps(script, timeout=8).strip()
+    try:
+        data = json.loads(out)
+    except (json.JSONDecodeError, ValueError):
+        data = {}
     return {
-        "cpu_pct": cpu_pct, "mem_pct": mem_pct,
-        "disk_free": st.f_bavail * st.f_frsize, "disk_total": st.f_blocks * st.f_frsize,
-        "pagefile_bytes": pagefile_bytes, "ncpu": os.cpu_count() or 1,
+        "mem_pct": data.get("mem_pct", 0) or 0,
+        "cpu_pct": data.get("cpu_pct", 0) or 0,
+        "disk_free": data.get("disk_free", 0) or 0,
+        "disk_total": data.get("disk_total", 0) or 0,
+        "pagefile_bytes": (data.get("pagefile_mb", 0) or 0) * 1048576,
+        "ncpu": data.get("ncpu", 1) or 1,
     }
 
 
@@ -332,7 +332,8 @@ def world_stats():
     if not wdir.is_dir():
         return 0, 0
     size = sum(f.stat().st_size for f in wdir.glob("*") if f.is_file())
-    backups = len(list(BACKUP_DIR.glob(f"{wdir.name}_*.zip"))) if BACKUP_DIR.is_dir() else 0
+    prefix = wdir.name
+    backups = len(list(BACKUP_DIR.glob(f"{prefix}_*.zip"))) if BACKUP_DIR.is_dir() else 0
     return size, backups
 
 
@@ -410,9 +411,12 @@ def action_start():
     if server_pid():
         return {"ok": False, "error": "server already running"}
 
-    exe_path = INSTALL_DIR / EXE_NAME
+    sdir = server_dir()
+    if sdir is None:
+        return {"ok": False, "error": "$ServerDir not found in start.ps1"}
+    exe_path = sdir / EXE_NAME
     if not exe_path.is_file():
-        return {"ok": False, "error": f"{exe_path} not found"}
+        return {"ok": False, "error": f"not found: {exe_path}"}
     if not PASSWORD_FILE.exists():
         return {"ok": False, "error": "no password set yet"}
     password = PASSWORD_FILE.read_text(encoding="utf-8").strip()
@@ -451,40 +455,32 @@ def action_start():
     for key in cfg["setkeys"]:
         args += ["-setkey", key]
 
-    env = dict(os.environ)
-    env["LD_LIBRARY_PATH"] = f"{exe_path.parent}/linux64:{env.get('LD_LIBRARY_PATH', '')}"
-    env["SteamAppId"] = "892970"
-
     log_handle = open(log_path, "wb")
     proc = subprocess.Popen(
-        args, cwd=str(exe_path.parent),
+        args, cwd=str(sdir),
         stdout=log_handle, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-        env=env, start_new_session=True,
+        creationflags=CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
     )
     with _managed_lock:
         _managed_proc = proc
-    try:
-        os.setpriority(os.PRIO_PROCESS, proc.pid, 10)
-    except OSError:
-        pass
+    run_ps(f"(Get-Process -Id {proc.pid} -ErrorAction SilentlyContinue).PriorityClass = 'BelowNormal'")
     return {"ok": True}
 
 
-def _wait_for_exit_then_clear(pid, hard_deadline):
+def _terminate(pid):
+    run_ps(f"Stop-Process -Id {pid} -Force -ErrorAction SilentlyContinue")
+
+
+def _wait_for_save_then_kill(pid, baseline_saves, hard_deadline):
     global _managed_proc, _stop_state
-    try:
-        os.kill(pid, signal.SIGINT)
-    except OSError:
-        pass
     while time.time() < hard_deadline:
         if server_pid() != pid:
             break
-        time.sleep(1)
+        if log_stats(current_log())["saves"] > baseline_saves:
+            break
+        time.sleep(2)
     if server_pid() == pid:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+        _terminate(pid)
     with _managed_lock:
         if _managed_proc is not None and _managed_proc.pid == pid:
             _managed_proc = None
@@ -493,6 +489,11 @@ def _wait_for_exit_then_clear(pid, hard_deadline):
 
 
 def action_stop():
+    # This build of the server does not react to a programmatic Ctrl+C/Ctrl+Break
+    # on Windows (verified: GenerateConsoleCtrlEvent is delivered, but no
+    # save-and-exit happens). So we wait for the next scheduled autosave and
+    # only then end the process — not instant, but guaranteed not to lose
+    # world progress.
     global _stop_state
     pid = server_pid()
     if not pid:
@@ -500,14 +501,16 @@ def action_stop():
     with _stop_lock:
         if _stop_state is not None:
             return {"ok": True, "pending": True}
-        hard_deadline = time.time() + 60
+        baseline = log_stats(current_log())["saves"]
+        save_interval = read_config()["save_interval"]
+        hard_deadline = time.time() + save_interval + 180
         _stop_state = {"requested_at": time.time(), "hard_deadline": hard_deadline}
-    threading.Thread(target=_wait_for_exit_then_clear, args=(pid, hard_deadline), daemon=True).start()
+    threading.Thread(target=_wait_for_save_then_kill, args=(pid, baseline, hard_deadline), daemon=True).start()
     return {"ok": True, "pending": True}
 
 
 def action_config(patch):
-    unknown = [k for k in patch if k not in DEFAULT_CONFIG]
+    unknown = [k for k in patch if k not in CONFIG_SET]
     if unknown:
         return {"ok": False, "error": f"unknown fields: {', '.join(unknown)}"}
     write_config(patch)
@@ -522,11 +525,13 @@ def list_worlds():
 
 def action_switch_world(name):
     name = name.strip()
-    if not name or not re.match(r"^[A-Za-z0-9_-]{1,32}$", name):
+    if not name or not re.match(r'^[A-Za-z0-9_-]{1,32}$', name):
         return {"ok": False, "error": "invalid world name (letters/digits/-/_ up to 32 chars)"}
     if server_pid():
         return {"ok": False, "error": "stop the server first"}
-    write_config({"world_name": name})
+    text = START_SCRIPT.read_text(encoding="utf-8")
+    text = _ps_set_string(text, "WorldName", name)
+    START_SCRIPT.write_text(text, encoding="utf-8")
     return {"ok": True, "new_world": not world_dir(name).is_dir()}
 
 
@@ -546,14 +551,19 @@ def list_backups():
                         break
         except (zipfile.BadZipFile, OSError):
             pass
-        out.append({"file": f.name, "save": save_num, "mtime": int(f.stat().st_mtime), "size": f.stat().st_size})
+        out.append({
+            "file": f.name,
+            "save": save_num,
+            "mtime": int(f.stat().st_mtime),
+            "size": f.stat().st_size,
+        })
     return out
 
 
 def action_rollback(filename):
     if server_pid():
         return {"ok": False, "error": "stop the server first"}
-    if "/" in filename or filename.startswith(".") or not filename.endswith(".zip"):
+    if "/" in filename or "\\" in filename or filename.startswith(".") or not filename.endswith(".zip"):
         return {"ok": False, "error": "invalid file name"}
     target = BACKUP_DIR / filename
     if not target.is_file():
@@ -627,8 +637,12 @@ def _read_access(kind):
     path = ACCESS_FILES[kind]
     if not path.is_file():
         return []
-    return [line.strip() for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
-            if line.strip() and not line.strip().startswith("//")]
+    ids = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if line and not line.startswith("//"):
+            ids.append(line)
+    return ids
 
 
 def read_access_lists():
@@ -638,7 +652,7 @@ def read_access_lists():
 def action_access(kind, action, platform_id):
     if kind not in ACCESS_FILES:
         return {"ok": False, "error": "unknown list"}
-    if not re.match(r"^[A-Za-z]+_[\w-]+$", platform_id):
+    if not re.match(r'^[A-Za-z]+_[\w-]+$', platform_id):
         return {"ok": False, "error": "invalid ID format (expected Platform_UserID)"}
     path = ACCESS_FILES[kind]
     current = _read_access(kind)
@@ -705,7 +719,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if not allowed(self.client_address[0]):
-            self.send_error(403)
+            self.send_error(403, "only private network")
             return
         path = self.path.split("?")[0].rstrip("/")
         query = {}
@@ -741,7 +755,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not allowed(self.client_address[0]):
-            self.send_error(403)
+            self.send_error(403, "only private network")
             return
         path = self.path.split("?")[0].rstrip("/")
         body = self._read_json_body()
@@ -778,21 +792,6 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-def _handle_container_stop(signum, frame):
-    pid = server_pid()
-    if pid:
-        try:
-            os.kill(pid, signal.SIGINT)
-        except OSError:
-            pass
-        deadline = time.time() + 55
-        while time.time() < deadline and server_pid() == pid:
-            time.sleep(1)
-    raise SystemExit(0)
-
-
 if __name__ == "__main__":
-    signal.signal(signal.SIGTERM, _handle_container_stop)
-    ROOT.mkdir(parents=True, exist_ok=True)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    ROOT.joinpath("panel").mkdir(exist_ok=True)
     ThreadingHTTPServer(BIND, Handler).serve_forever()

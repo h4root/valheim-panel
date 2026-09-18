@@ -1,4 +1,6 @@
-.env
+.password
+save/
+logs/
+backups/
 __pycache__/
 *.pyc
-server/

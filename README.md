@@ -1,46 +1,37 @@
-# Valheim Panel
+# Valheim Panel (Windows)
 
-A web control panel for the official Valheim dedicated server, plus a Docker image that runs both.
+A launch script plus a web control panel for the official Valheim dedicated server on Windows.
 
-Start, stop, edit world modifiers, manage the admin/ban/permit lists, roll back to a backup, watch the live log — from a phone or any browser on your network.
+## Setup
 
-## Run
+1. In Steam: Library → filter by Tools → **Valheim Dedicated Server** → Install.
+2. Clone this repo next to nothing important — it creates `save/`, `logs/`, `backups/` here.
+3. Set a password:
+   ```powershell
+   'yourpassword' | Set-Content -NoNewline .password
+   ```
+4. If Steam isn't installed at the default path, edit `$ServerDir` at the top of `start.ps1`.
+5. Right-click `start.ps1` → "Run with PowerShell". First run, watch the window until you see `Game server connected`, then stop it once with Ctrl+C and confirm `World save (5/5) done` appears — that confirms your setup saves correctly before you rely on it.
 
+## Panel
+
+```powershell
+python panel\server.py
 ```
-cp .env.example .env
-# edit .env: set SERVER_NAME and PASSWORD at least
-docker compose up -d
-```
 
-Open `http://<host>:3030`.
+Open `http://<this-pc-ip>:3030` from any device on the same network.
 
-The server binary is downloaded via SteamCMD on first start and kept in the `valheim-server` volume, so later restarts don't re-download it.
+The panel can start/stop the server itself once it's running — you don't need to keep using `start.ps1` directly after the first check.
 
-## Config
+### Stopping
 
-Set once in `.env` before the first start — the panel takes over from there and everything else (world modifiers, resources, presets, access lists, backups) is configured from the UI:
+This build of the dedicated server does not respond to a programmatic Ctrl+C on Windows. The panel's Stop button waits for the next scheduled autosave and then ends the process — not instant, but no progress is lost. For a manual stop from the console window itself, Ctrl+C once works normally.
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `SERVER_NAME` | `My Valheim Server` | name shown in the server list |
-| `WORLD_NAME` | `Dedicated` | world to load or create |
-| `PORT` | `2456` | game port (and `PORT+1`) |
-| `PASSWORD` | — | required, 5+ characters |
-| `PUBLIC` | `false` | listed in the public server browser |
-| `CROSSPLAY` | `true` | PlayFab backend, no port forwarding needed |
+## Requirements
 
-## Stopping
-
-`docker compose stop` sends SIGTERM to the panel, which forwards SIGINT to the game process and waits for it to save before exiting. Stopping through the panel UI does the same thing directly.
-
-## Data
-
-Everything lives in the `valheim-server` volume: `/server/install` (game binary), `/server/config` (world saves, access lists), `/server/logs`, `/server/backups`, `/server/panel.json` (panel settings), `/server/password`.
-
-## Windows
-
-A native Windows build (no Docker) is on the [`windows`](../../tree/windows) branch.
+- Windows, PowerShell 7+
+- Python 3.9+, no external packages
 
 ## License
 
-MIT
+MIT — see the [main branch](../../tree/main).
