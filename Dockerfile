@@ -3,7 +3,7 @@ FROM debian:bookworm-slim
 RUN dpkg --add-architecture i386 && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-        ca-certificates curl lib32gcc-s1 python3 procps && \
+        ca-certificates curl lib32gcc-s1 python3 && \
     rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/steamcmd && \

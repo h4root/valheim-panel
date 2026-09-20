@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import os
 import re
@@ -85,9 +86,10 @@ _stop_state = None  # {"requested_at": epoch, "hard_deadline": epoch} while a st
 
 
 def allowed(host):
-    # Docker containers are expected to publish this port only on a trusted
-    # network (see docker-compose.yml comments) — no extra IP filtering here.
-    return True
+    try:
+        return ipaddress.ip_address(host).is_private
+    except ValueError:
+        return False
 
 
 # ---------- config storage (JSON file, seeded from env on first boot) ----------
@@ -189,11 +191,18 @@ def server_pid():
             return _managed_proc.pid
         if _managed_proc is not None:
             _managed_proc = None
-    try:
-        out = subprocess.run(["pgrep", "-x", EXE_NAME], capture_output=True, text=True, timeout=5).stdout.strip()
-    except (subprocess.SubprocessError, OSError):
-        return None
-    return int(out.splitlines()[0]) if out else None
+    # Matched on argv[0] rather than the process name: the kernel truncates
+    # comm to 15 characters, which is shorter than the binary's own name.
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            argv0 = (entry / "cmdline").read_bytes().split(b"\0")[0].decode(errors="replace")
+        except OSError:
+            continue
+        if argv0.endswith("/" + EXE_NAME) or argv0 == EXE_NAME:
+            return int(entry.name)
+    return None
 
 
 def _proc_stat_ticks(text):
@@ -427,6 +436,7 @@ def action_start():
     log_path = LOG_DIR / f"server_{stamp}.log"
     args = [
         str(exe_path),
+        "-nographics", "-batchmode",
         "-name", cfg["server_name"],
         "-port", str(cfg["port"]),
         "-world", cfg["world_name"],
